@@ -1,0 +1,9 @@
+*~
+build
+src/tags
+tags
+.color_coded
+.ycm_extra_conf.py
+*.swp
+*.bin
+*.exe
