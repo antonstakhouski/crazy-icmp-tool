@@ -1,8 +1,7 @@
-#include "cross_header.h"
 #include "client_lib.h"
 
-int pid = -1;
 struct protoent *proto = NULL;
+pthread_mutex_t lock;
 
 unsigned short checksum(void *b, int len)
 {
@@ -30,11 +29,16 @@ void tv_sub(struct timeval *out, const struct timeval *in)
     return;
 }
 
-void display(void* buf, int bytes)
+int display(void* buf, int bytes, uint16_t thread_id)
 {
     struct iphdr *ip = (struct iphdr*)buf;
     struct icmphdr *icmp = (struct icmphdr*)((int*)buf + ip->ihl);
+    if (icmp->un.echo.id != thread_id)
+        return -1;
 
+    struct timeval finish;
+    gettimeofday(&finish, NULL);
+    pthread_mutex_lock(&lock);
     printf("----------\n");
     for (int i = 0; i < bytes; i++)
     {
@@ -51,22 +55,25 @@ void display(void* buf, int bytes)
 
     ntoa_addr.s_addr = ip->daddr;
     printf("dst=%s\n", inet_ntoa(ntoa_addr));
-    printf("pid: %u process:%d\n", icmp->un.echo.id, pid);
-    if (icmp->un.echo.id == pid)
+    printf("thread_id: %u thread:%u\n", icmp->un.echo.id, thread_id);
+    if (icmp->un.echo.id == thread_id)
     {
         printf("ICMP: type[%d/%d] checksum[%d] id[%d] seq[%d] ",
             icmp->type, icmp->code, ntohs(icmp->checksum),
             icmp->un.echo.id, icmp->un.echo.sequence);
-        struct timeval start, finish;
+        struct timeval start ;
         start = *((struct timeval*)((char*)icmp + sizeof(struct icmphdr)));
         gettimeofday(&finish, NULL);
         tv_sub(&finish, &start);
         printf("time= %.3fms\n", finish.tv_sec * 1000.0 + finish.tv_usec / 1000.0);
+        pthread_mutex_unlock(&lock);
+        return 0;
     }
-    return;
+    pthread_mutex_unlock(&lock);
+    return 1;
 }
 
-void listener(void)
+void listener(uint16_t thread_id)
 {
     int sd;
     struct sockaddr_in addr;
@@ -83,26 +90,28 @@ void listener(void)
 
         memset(buf, 0, sizeof(buf));
         bytes = recvfrom(sd, buf, sizeof(buf), 0, (struct sockaddr*)&addr, (socklen_t*)&len);
-        if (bytes > 0)
-            display(buf, bytes);
-        else
-            perror("recvfrom");
+        if (bytes > 0) {
+            int res = display(buf, bytes, thread_id);
+            if (!res) {
+                sleep(1);
+                break;
+            }
+        }
     }
-    exit(0);
 }
 
-void ping(struct sockaddr_in *addr)
+void* ping(void* arg)
 {
-    uint16_t mypid = getpid();
+    struct thread_info *tinfo = (struct thread_info*)arg;
+    struct sockaddr_in* addr = &(tinfo->addr);
     const int val = 255;
     int sd, cnt = 1;
     struct packet pckt;
-    struct sockaddr_in r_addr;
 
     sd = socket(PF_INET, SOCK_RAW, proto->p_proto);
     if (sd < 0) {
         perror("socket");
-        return;
+        return NULL;
     }
     if (setsockopt(sd, SOL_IP, IP_TTL, &val, sizeof(val)) != 0)
         perror("Set TTL option");
@@ -110,48 +119,50 @@ void ping(struct sockaddr_in *addr)
         perror("Request Nonblocking I/O");
 
     for (;;) {
-        int len = sizeof(r_addr);
-        printf("Msg #%d\n", cnt);
-        if (recvfrom(sd, &pckt, sizeof(pckt), 0, (struct sockaddr*)&r_addr, (socklen_t*)&len) > 0)
-            printf("***Got Message!***\n");
         memset(&pckt, 0, sizeof(pckt));
         pckt.hdr.type = ICMP_ECHO;
-        pckt.hdr.un.echo.id = mypid;
+        pckt.hdr.un.echo.id = tinfo->thread_id;
         gettimeofday(&(pckt.tm), NULL);
         pckt.hdr.un.echo.sequence = cnt++;
         pckt.hdr.checksum = checksum(&pckt, sizeof(pckt));
         if (sendto(sd, &pckt, sizeof(pckt), 0, (struct sockaddr*)addr, sizeof(*addr)) <= 0)
             perror("sendto");
-        sleep(1);
+        listener(tinfo->thread_id);
     }
-    return;
+    return NULL;
 }
 
 int main(int argc, char *argv[])
 {
     struct hostent *hname;
     struct sockaddr_in addr;
+    struct thread_info* tinfo;
 
-    if (argc != 2) {
+    if (argc < 2) {
         printf("usage: %s <addr>\n", argv[0]);
         exit(0);
     }
 
-    if (argc > 1) {
-        proto = getprotobyname("ICMP");
-        hname = gethostbyname(argv[1]);
+    tinfo = (struct thread_info*)calloc(argc - 1, sizeof(struct thread_info));
+    assert(!pthread_mutex_init(&lock, NULL));
+
+    proto = getprotobyname("ICMP");
+    for (int i = 1; i < argc; i++) {
+        hname = gethostbyname(argv[i]);
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = hname->h_addrtype;
         addr.sin_port = 0;
-        addr.sin_addr.s_addr = *(long*)hname->h_addr;
+        addr.sin_addr.s_addr = *(long*)hname->h_addr_list[0];
 
-        if ((pid = fork()) == 0)
-            ping(&addr);
-        else
-            listener();
-        wait(0);
+        tinfo[i].addr = addr;
+        pthread_create(&tinfo[i].thread_id, NULL, &ping, &tinfo[i]);
+
+        /*if ((pid = fork()) == 0)*/
+            /*ping(&addr);*/
+        /*else*/
+            /*listener();*/
     }
-    else
-        printf("usage: %s <addr>\n", argv[0]);
+    while(1);
+    pthread_mutex_destroy(&lock);
     return 0;
 }

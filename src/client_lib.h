@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <assert.h>
 #include <inttypes.h>
+#include <pthread.h>
 
 #include <stropts.h>
 #include <unistd.h>
@@ -31,6 +32,11 @@ struct packet
 {
     struct icmphdr hdr;
     struct timeval tm;
+};
+
+struct thread_info {
+    pthread_t thread_id;
+    struct sockaddr_in addr;
 };
 
 #endif //H_CLIENT_LIB

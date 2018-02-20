@@ -1,6 +1,6 @@
 CC ?= gcc
 CFLAGS=-c -Wall -O3 -pedantic -std=c11
-LDFLAGS=
+LDFLAGS=-pthread
 
 SOURCEDIR = src
 BUILDDIR = build
