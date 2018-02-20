@@ -33,43 +33,36 @@ int display(void* buf, int bytes, uint16_t thread_id)
 {
     struct iphdr *ip = (struct iphdr*)buf;
     struct icmphdr *icmp = (struct icmphdr*)((int*)buf + ip->ihl);
-    if (icmp->un.echo.id != thread_id)
-        return -1;
+    if (icmp->type == 0 || icmp->type == 11){
+        /*for (int i = 0; i < bytes; i++)*/
+        /*{*/
+            /*if (!(i & 15))*/
+                /*printf("\nX:%2d", i);*/
+            /*printf("%4x", ((unsigned char*)buf)[i]);*/
+        /*}*/
+        struct in_addr ntoa_addr;
+        ntoa_addr.s_addr = ip->saddr;
+        printf("IPv%d: hdr-size=%d pkt-size=%d protocol=%d  TTL=%d src=%s ",
+                ip->version, ip->ihl * 4, htons(ip->tot_len), ip->protocol,
+                ip->ttl, inet_ntoa(ntoa_addr));
 
-    struct timeval finish;
-    gettimeofday(&finish, NULL);
-    pthread_mutex_lock(&lock);
-    printf("----------\n");
-    for (int i = 0; i < bytes; i++)
-    {
-        if (!(i & 15))
-            printf("\nX:%2d", i);
-        printf("%4x", ((unsigned char*)buf)[i]);
+        ntoa_addr.s_addr = ip->daddr;
+        printf("dst=%s\n", inet_ntoa(ntoa_addr));
+        /*printf("thread_id: %u thread:%u\n", icmp->un.echo.id, thread_id);*/
+        /*if (icmp->un.echo.id == thread_id)*/
+        {
+            printf("ICMP: type[%d/%d] checksum[%d] id[%d] seq[%d] ",
+                    icmp->type, icmp->code, ntohs(icmp->checksum),
+                    icmp->un.echo.id, icmp->un.echo.sequence);
+            struct timeval start ;
+            start = *((struct timeval*)((char*)icmp + sizeof(struct icmphdr)));
+            pthread_mutex_unlock(&lock);
+            if (icmp->type == 0)
+                return 0;
+            else
+                return 1;
+        }
     }
-    printf("\n");
-    struct in_addr ntoa_addr;
-    ntoa_addr.s_addr = ip->saddr;
-    printf("IPv%d: hdr-size=%d pkt-size=%d protocol=%d  TTL=%d src=%s ",
-        ip->version, ip->ihl * 4, htons(ip->tot_len), ip->protocol,
-        ip->ttl, inet_ntoa(ntoa_addr));
-
-    ntoa_addr.s_addr = ip->daddr;
-    printf("dst=%s\n", inet_ntoa(ntoa_addr));
-    printf("thread_id: %u thread:%u\n", icmp->un.echo.id, thread_id);
-    if (icmp->un.echo.id == thread_id)
-    {
-        printf("ICMP: type[%d/%d] checksum[%d] id[%d] seq[%d] ",
-            icmp->type, icmp->code, ntohs(icmp->checksum),
-            icmp->un.echo.id, icmp->un.echo.sequence);
-        struct timeval start ;
-        start = *((struct timeval*)((char*)icmp + sizeof(struct icmphdr)));
-        gettimeofday(&finish, NULL);
-        tv_sub(&finish, &start);
-        printf("time= %.3fms\n", finish.tv_sec * 1000.0 + finish.tv_usec / 1000.0);
-        pthread_mutex_unlock(&lock);
-        return 0;
-    }
-    pthread_mutex_unlock(&lock);
     return 1;
 }
 
@@ -84,18 +77,30 @@ void listener(uint16_t thread_id)
         perror("socket");
         exit(0);
     }
+    if ( fcntl(sd, F_SETFL, O_NONBLOCK) != 0)
+        perror("Request Nonblocking I/O");
 
+    struct timeval start;
+    struct timeval finish;
+    gettimeofday(&start, NULL);
     for(;;) {
+        /*puts("listener");*/
         int bytes, len = sizeof(addr);
 
         memset(buf, 0, sizeof(buf));
         bytes = recvfrom(sd, buf, sizeof(buf), 0, (struct sockaddr*)&addr, (socklen_t*)&len);
+        gettimeofday(&finish, NULL);
+        tv_sub(&finish, &start);
+        if (finish.tv_sec > 1)
+            return;
         if (bytes > 0) {
             int res = display(buf, bytes, thread_id);
             if (!res) {
                 sleep(1);
-                break;
+                exit(0);
             }
+            else
+                break;
         }
     }
 }
@@ -104,7 +109,6 @@ void* ping(void* arg)
 {
     struct thread_info *tinfo = (struct thread_info*)arg;
     struct sockaddr_in* addr = &(tinfo->addr);
-    const int val = 255;
     int sd, cnt = 1;
     struct packet pckt;
 
@@ -113,16 +117,20 @@ void* ping(void* arg)
         perror("socket");
         return NULL;
     }
-    if (setsockopt(sd, SOL_IP, IP_TTL, &val, sizeof(val)) != 0)
-        perror("Set TTL option");
     if ( fcntl(sd, F_SETFL, O_NONBLOCK) != 0)
         perror("Request Nonblocking I/O");
 
+    int val = 0;
     for (;;) {
+        val++;
+        printf("\n");
+        printf("----------\n");
+        printf("TTL: %d\n", val);
+        if (setsockopt(sd, SOL_IP, IP_TTL, &val, sizeof(val)) != 0)
+            perror("Set TTL option");
         memset(&pckt, 0, sizeof(pckt));
         pckt.hdr.type = ICMP_ECHO;
         pckt.hdr.un.echo.id = tinfo->thread_id;
-        gettimeofday(&(pckt.tm), NULL);
         pckt.hdr.un.echo.sequence = cnt++;
         pckt.hdr.checksum = checksum(&pckt, sizeof(pckt));
         if (sendto(sd, &pckt, sizeof(pckt), 0, (struct sockaddr*)addr, sizeof(*addr)) <= 0)

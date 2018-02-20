@@ -31,7 +31,6 @@
 struct packet
 {
     struct icmphdr hdr;
-    struct timeval tm;
 };
 
 struct thread_info {
