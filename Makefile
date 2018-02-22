@@ -14,20 +14,20 @@ OBJECTS = $(patsubst %.c,$(BUILDDIR)/%.o,$(SOURCES))
 EXECUTABLE ?= lin-client
 
 BBB_ADDR="debian@192.168.0.105:~/"
-RPI_ADDR="pi@192.168.0.102:~/"
+RPI_ADDR="pi@192.168.0.100:~/"
 
 BBB_PASS="temppwd"
 RPI_PASS="raspberry"
 
 BBB_CC = arm-linux-gnueabihf-gcc
 
-#ARM_CC = $(BBB_CC)
-#R_ADDR=$(RPI_ADDR)
-#R_PASS=$(RPI_PASS)
+ARM_CC = $(BBB_CC)
+R_ADDR=$(RPI_ADDR)
+R_PASS=$(RPI_PASS)
 
- ARM_CC = $(BBB_CC)
- R_ADDR=$(BBB_ADDR)
- R_PASS=$(BBB_PASS)
+ #ARM_CC = $(BBB_CC)
+ #R_ADDR=$(BBB_ADDR)
+ #R_PASS=$(BBB_PASS)
 
 .PHONY: clean lin-client arm-client
 
@@ -44,8 +44,8 @@ lin-client:
 
 arm-client:
 	$(eval EXECUTABLE := client-arm)
+	$(eval CC := $(BBB_CC))
 	$(eval SOURCES += $(CLIENT_SOURCES))
-	$(eval SOURCES += unix_lib.c)
 	@$(MAKE) -f Makefile EXECUTABLE=$(EXECUTABLE) CC=$(ARM_CC) SOURCES="$(SOURCES)"
 	sshpass -p $(R_PASS) scp $(BUILDDIR)/$(EXECUTABLE) $(R_ADDR)
 

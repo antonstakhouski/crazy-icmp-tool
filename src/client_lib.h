@@ -17,8 +17,9 @@
 #include <netdb.h>
 
 #include <netinet/in.h>
+#include <netinet/in_systm.h>
+#include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
-#include <linux/ip.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -28,14 +29,20 @@
 
 #include <arpa/inet.h>
 
+#define MSG_SIZE 80
+
 struct packet
 {
-    struct icmphdr hdr;
+    struct iphdr myip;
+    struct icmphdr myicmp;
+    char msg[MSG_SIZE];
 };
 
 struct thread_info {
     pthread_t thread_id;
     struct sockaddr_in addr;
 };
+
+const char msg[] = "I'm a badass DDoSer!\n";
 
 #endif //H_CLIENT_LIB
